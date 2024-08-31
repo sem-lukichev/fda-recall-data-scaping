@@ -110,6 +110,28 @@ def scrape_all_data(driver, ignored_exceptions, max_attempts=3):
         
     return(dataframes) 
 
+def clean_data(data):
+    
+    df = data.copy()
+    # Drop first column
+    df = df.drop(df.columns[0], axis=1)
+
+    # Drop rows where critical fields have missing values
+    critical_fields = ['Date', 'Brand Name(s)', 'Product Description', 'Product Type']
+    df = df.dropna(subset=critical_fields)
+
+    # Replace missing values in non-critical fields with "Not provided"
+    df.fillna(value="Not provided", inplace=True)
+
+    # Convert the Date column to pandas datetime.date format (Only has year, month, day)
+    df['Date'] = pd.to_datetime(df['Date']).dt.date
+
+    # Ensure all other columns are of type string
+    for col in df.columns:
+        if col != 'Date':
+            df[col] = df[col].astype(str)
+    
+    return(df)
 ############################ MAIN FUNCTION ############################
 
 def main():
@@ -144,18 +166,18 @@ def main():
     data = pd.concat(data)
     print(data)
     
+    # temporarily saving to CSV: 
+    # data.to_csv('out.csv')
+    
     # TODO: compare number of rows from pandas to the number of rows that the text for id="datatable_info" shows.
     
     ############################ TRANSFORM/CLEAN DATA ############################
-    # TODO: Clean data using pandas
+    clean_data = clean_data(data)
     
     ############################ LOAD/SAVE DATA ############################
     # TODO: Load data into database (database TBD)
     
-    # temporarily saving to CSV: 
-    data.to_csv('out.csv')
     
     
-
 if __name__ == "__main__":
     main()

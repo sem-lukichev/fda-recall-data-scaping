@@ -14,7 +14,7 @@ df = df.dropna(subset=critical_fields)
 # Replace missing values in non-critical fields with "Not provided"
 df.fillna(value="Not provided", inplace=True)
 
-# Convert the Date column to pandas datetime.date format
+# Convert the Date column to pandas datetime.date format (Only has year, month, day)
 df['Date'] = pd.to_datetime(df['Date']).dt.date
 
 # Ensure all other columns are of type string
@@ -26,3 +26,5 @@ print(df)
 print()
 print("Missing values:")
 print(df.isna().sum())
+print()
+print(df)
