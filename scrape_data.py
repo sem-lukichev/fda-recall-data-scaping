@@ -13,6 +13,8 @@ import warnings
 from io import StringIO
 
 ############################ FUNCTIONS ############################
+# TODO: Scrape only new data function
+
 def scrape_all_data(driver, ignored_exceptions, max_attempts=3):
     # List of pandas dfs to be returned
     dataframes = []
@@ -130,6 +132,7 @@ def main():
     driver.get(URL)
     
     ############################ SCRAPE DATA ############################
+    # TODO: Conditional for scraping all data or only new data after a given date
     data = scrape_all_data(driver, ignored_exceptions)
     
     # Exit driver at the end of the loop
@@ -151,6 +154,8 @@ def main():
     
     # temporarily saving to CSV: 
     data.to_csv('out.csv')
+    
+    
 
 if __name__ == "__main__":
     main()
