@@ -11,16 +11,19 @@ from selenium.webdriver.support.ui import Select
 import pandas as pd
 import warnings
 from io import StringIO
+import duckdb
+from datetime import date
 
 ############################ FUNCTIONS ############################
 # TODO: Scrape only new data function
 
-def scrape_all_data(driver, ignored_exceptions, max_attempts=3):
+def scrape_data(driver, ignored_exceptions, most_recent_date=None):
     # List of pandas dfs to be returned
     dataframes = []
     
-    # Loop condition variable
-    has_next_table = True
+    # Loop condition variables
+    flag = True
+    has_recent_date = most_recent_date is not None
     
     # DEBUG: Tables scraped counter
     table_num = 1
@@ -28,7 +31,7 @@ def scrape_all_data(driver, ignored_exceptions, max_attempts=3):
     # Load HTML to scrape data
     html = StringIO(driver.page_source)
     
-    while(has_next_table):        
+    while(flag):        
         ### Extract the HTML table ###
         try:
             # Load HTML to scrape data
@@ -38,23 +41,25 @@ def scrape_all_data(driver, ignored_exceptions, max_attempts=3):
             dfs = pd.read_html(html)
 
             # Add df to list of dfs
-            if dfs: # Table found
+            if dfs:
                 df = dfs[0]
+                # Convert the Date column to pandas datetime.date format (Only has year, month, day) for date comparisons in case most_recent_date was provided.
+                df['Date'] = pd.to_datetime(df['Date']).dt.date
+                if has_recent_date:
+                    # Filter out rows with dates earlier than or equal to the most recent date
+                    df = df[df['Date'] > most_recent_date]
                 dataframes.append(df)
             else: # Table not found
                 print("Error whilst scraping table", table_num)
                 print("No tables found in the HTML content.")
                 break
-                
         except IndexError:
             print("No table found on the page.")
             break
-            
         except TimeoutException:
             print("Error whilst scraping table", table_num)
             print("Table element not found within the timeout period.")
             break
-            
         except Exception as e:
             print("Error whilst scraping table", table_num)
             print(f"An error has occurred whilst loading table's outer HTML: {e}")
@@ -67,33 +72,42 @@ def scrape_all_data(driver, ignored_exceptions, max_attempts=3):
             print("Error whilst scraping table", table_num)
             print(f"An error has occurred whilst loading next button with id datatable_next: {e}")
             break
-            
-        ### Click next button to go to next table ###
-        try:
-            next_button = WebDriverWait(driver, 10, ignored_exceptions=ignored_exceptions).until(EC.element_to_be_clickable((By.ID, "datatable_next")))
-            driver.execute_script("arguments[0].click();", next_button)
-        except Exception as e:
-            print("Error whilst scraping table", table_num)
-            print(f"An error has occurred whilst trying to click next button with id datatable_next: {e}")
-            break
          
-        ### Locate last button ###
+        ### Update loop condition ###
         try:
             last_btn = WebDriverWait(driver, 10, ignored_exceptions=ignored_exceptions).until(EC.presence_of_element_located((By.ID, "datatable_last")))
-            last_btn_classes = last_btn.get_attribute("class")
             
-            # Update loop condition (whether there's more data to scrape or not)
-            has_next_table = "disabled" not in last_btn_classes
+            # Update loop condition for scraping all data (whether there's more data to scrape)
+            last_btn_classes = last_btn.get_attribute("class")
+            flag = "disabled" not in last_btn_classes
+            
+            # Update loop condition for scraping only new data
+            if has_recent_date:
+                if df.shape[0] < 10: # checking most recent data frame
+                    # New data does not take up a full table of 10 rows, meaning there is no more new data. 
+                    # Loop condition updated to false to stop scraping.
+                    flag = False
+                    print("No more new data, ending data scraping...")
         except Exception as e:
             print("Error whilst scraping table", table_num)
             print(f"An error has occurred whilst trying to locate last button with id datatable_last: {e}")
             break
-            
+        
+        ### Click next button to go to next table ###
+        if flag: # Only go to next page if loop condition is still true
+            try:
+                next_button = WebDriverWait(driver, 10, ignored_exceptions=ignored_exceptions).until(EC.element_to_be_clickable((By.ID, "datatable_next")))
+                driver.execute_script("arguments[0].click();", next_button)
+            except Exception as e:
+                print("Error whilst scraping table", table_num)
+                print(f"An error has occurred whilst trying to click next button with id datatable_next: {e}")
+                break
+        
         # DEBUG: Update table counter
         table_num += 1
         
         ### Wait for old element vars to go stale ###
-        if has_next_table:
+        if flag:
             try:
                 WebDriverWait(driver, 10).until(EC.staleness_of(next_button))
             except Exception as e:
@@ -110,6 +124,25 @@ def scrape_all_data(driver, ignored_exceptions, max_attempts=3):
         
     return(dataframes) 
 
+def get_most_recent_date_from_db(table_name, db_connection):
+    query = f"SELECT MAX(Date) FROM {table_name};"
+    result = duckdb.query(query, connection=db_connection).fetchall()
+    
+    most_recent_date = result[0][0]
+    
+    # If the result is not a date object, convert it to pandas datetime.date format
+    if not isinstance(most_recent_date, date):
+        most_recent_date = pd.to_datetime(most_recent_date).date()
+    
+    return most_recent_date
+
+def update_database(new_data_df, table_name, db_connection):
+    if not new_data_df.empty:
+        new_data_df.to_sql(table_name, db_connection, if_exists='append', index=False)
+        print(f"Inserted {len(new_data_df)} new records into {table_name}.")
+    else:
+        print("No new data to insert.")
+
 def clean_data(data):
     
     df = data.copy()
@@ -124,7 +157,7 @@ def clean_data(data):
     df.fillna(value="Not provided", inplace=True)
 
     # Convert the Date column to pandas datetime.date format (Only has year, month, day)
-    df['Date'] = pd.to_datetime(df['Date']).dt.date
+    #df['Date'] = pd.to_datetime(df['Date']).dt.date
 
     # Ensure all other columns are of type string
     for col in df.columns:
@@ -132,6 +165,7 @@ def clean_data(data):
             df[col] = df[col].astype(str)
     
     return(df)
+ 
 ############################ MAIN FUNCTION ############################
 
 def main():
@@ -155,7 +189,7 @@ def main():
     
     ############################ SCRAPE DATA ############################
     # TODO: Conditional for scraping all data or only new data after a given date
-    data = scrape_all_data(driver, ignored_exceptions)
+    data = scrape_data(driver, ignored_exceptions)
     
     # Exit driver at the end of the loop
     driver.quit()
@@ -165,9 +199,6 @@ def main():
     
     data = pd.concat(data)
     print(data)
-    
-    # temporarily saving to CSV: 
-    # data.to_csv('out.csv')
     
     # TODO: compare number of rows from pandas to the number of rows that the text for id="datatable_info" shows.
     
