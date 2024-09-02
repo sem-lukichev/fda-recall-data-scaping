@@ -86,7 +86,7 @@ def scrape_data(driver, ignored_exceptions, most_recent_date=None):
                 if df.shape[0] < 10: # checking most recent data frame
                     # New data does not take up a full table of 10 rows, meaning there is no more new data. 
                     # Loop condition updated to false to stop scraping.
-                    flag = False
+                    flag = False 
                     print("No more new data, ending data scraping...")
         except Exception as e:
             print("Error whilst scraping table", table_num)
@@ -136,13 +136,6 @@ def get_most_recent_date_from_db(table_name, db_connection):
     
     return most_recent_date
 
-def update_database(new_data_df, table_name, db_connection):
-    if not new_data_df.empty:
-        new_data_df.to_sql(table_name, db_connection, if_exists='append', index=False)
-        print(f"Inserted {len(new_data_df)} new records into {table_name}.")
-    else:
-        print("No new data to insert.")
-
 def clean_data(data):
     
     df = data.copy()
@@ -165,7 +158,41 @@ def clean_data(data):
             df[col] = df[col].astype(str)
     
     return(df)
- 
+
+def generate_create_table_statement(df, table_name):
+    # Mapping pandas dtypes to DuckDB SQL types
+    dtype_mapping = {
+        'int64': 'BIGINT',
+        'float64': 'DOUBLE',
+        'bool': 'BOOLEAN',
+        'datetime64[ns]': 'DATE',
+        'object': 'TEXT'
+    }
+    
+    # Start of CREATE TABLE statement
+    create_stmt = f"CREATE TABLE IF NOT EXISTS {table_name} ("
+    
+    # Loop through each column and its dtype to add column definitions
+    column_definitions = []
+    for column in df.columns:
+        col_name = column.replace(" ", "_").upper() 
+        col_dtype = str(df[column].dtype)
+        # Default to TEXT if dtype not found
+        sql_type = dtype_mapping.get(col_dtype, 'TEXT')  
+        
+        column_definitions.append(f"{col_name} {sql_type}")
+    
+    # Combine column definitions and complete the statement
+    create_stmt += ", ".join(column_definitions) + ");"
+    
+    return create_stmt
+
+def update_database(new_data_df, table_name, db_connection):
+    if not new_data_df.empty:
+        new_data_df.to_sql(table_name, db_connection, if_exists='append', index=False)
+        print(f"Inserted {len(new_data_df)} new records into {table_name}.")
+    else:
+        print("No new data to insert.")
 ############################ MAIN FUNCTION ############################
 
 def main():
