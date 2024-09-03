@@ -84,7 +84,7 @@ def scrape_data(driver, ignored_exceptions, most_recent_date=None):
             # Update loop condition for scraping only new data
             if has_recent_date:
                 if df.shape[0] < 10: # checking most recent data frame
-                    # New data does not take up a full table of 10 rows, meaning there is no more new data. 
+                    # New data does not take up a full table of 10 rows, meaning there are no more new data. 
                     # Loop condition updated to false to stop scraping.
                     flag = False 
                     print("No more new data, ending data scraping...")
@@ -218,7 +218,7 @@ def main():
     # Initialize database or connect to database if it already exists
     db_name = 'fda_recall_etl.db'
     db_connection = duckdb.connect(db_name) 
-    table_name = 'fda_food_recall'
+    table_name = 'recalled_products'
     
     # Initialize web driver
     driver = webdriver.Chrome(options=options)
@@ -240,20 +240,18 @@ def main():
     
     num_tables = len(data)
     print("Total tables scraped:", num_tables)
-    
     data = pd.concat(data)
     print(data)
     
-    # TODO: Compare number of rows from pandas to the number of rows that the text for id="datatable_info" shows.
+    # TODO: Check for completeness: compare number of rows from pandas to the number of rows that the text for id="datatable_info" shows.
     
     ############################ TRANSFORM/CLEAN DATA ############################
     clean_data = clean_data(data)
     
     ############################ LOAD/SAVE DATA ############################
-    # TODO: Load data into database (database TBD)
-    
+    update_database(clean_data, table_name, db_connection)
     db_connection.close()
     
-    
+     
 if __name__ == "__main__":
     main()
