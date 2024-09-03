@@ -125,16 +125,22 @@ def scrape_data(driver, ignored_exceptions, most_recent_date=None):
     return(dataframes) 
 
 def get_most_recent_date_from_db(table_name, db_connection):
-    query = f"SELECT MAX(Date) FROM {table_name};"
-    result = duckdb.query(query, connection=db_connection).fetchall()
+    try:
+        query = f"SELECT MAX(Date) FROM {table_name};"
+        result = duckdb.query(query, connection=db_connection).fetchall()
+        
+        most_recent_date = result[0][0] if result and result[0][0] is not None else None
+        
+        # If most_recent_date is not None and not a date object, convert it to pandas datetime.date format
+        if most_recent_date is not None and not isinstance(most_recent_date, date):
+            most_recent_date = pd.to_datetime(most_recent_date).date()
+        
+        return most_recent_date
     
-    most_recent_date = result[0][0] if result and result[0][0] is not None else None
-    
-    # If most_recent_date is not None and not a date object, convert it to pandas datetime.date format
-    if most_recent_date is not None and not isinstance(most_recent_date, date):
-        most_recent_date = pd.to_datetime(most_recent_date).date()
-    
-    return most_recent_date
+    except duckdb.Error as e:
+        # Database does not exist
+        print(f"An error occurred: {e}") 
+        return None
 
 def clean_data(data):
     
@@ -143,7 +149,7 @@ def clean_data(data):
     df = df.drop(df.columns[0], axis=1)
 
     # Drop rows where critical fields have missing values
-    critical_fields = ['Date', 'Brand Name(s)', 'Product Description', 'Product Type']
+    critical_fields = ['Brand Name(s)', 'Product Description', 'Product Type']
     df = df.dropna(subset=critical_fields)
 
     # Replace missing values in non-critical fields with "Not provided"
@@ -187,14 +193,10 @@ def generate_create_table_statement(df, table_name):
     
     return create_stmt
 
-def update_database(new_data_df, table_name, db_connection):
-    # Dynamically generate create table statement if the table doesn't exist
-    create_table_statement = generate_create_table_statement(new_data_df, table_name)
-    duckdb.query(create_table_statement, connection=db_connection)
-    
-    if not new_data_df.empty:
-        new_data_df.to_sql(table_name, db_connection, if_exists='append', index=False)
-        print(f"Inserted {len(new_data_df)} new records into {table_name}.")
+def update_database(db_connection, table_name, new_data):
+    if not new_data.empty:
+        new_data.to_sql(table_name, db_connection, if_exists='append', index=False)
+        print(f"Inserted {len(new_data)} new rows into {table_name}.")
     else:
         print("No new data to insert.")
         
@@ -215,7 +217,7 @@ def main():
     warnings.simplefilter(action='ignore', category=FutureWarning)
     ignored_exceptions=(NoSuchElementException,StaleElementReferenceException,)
     
-    # Initialize database or connect to database if it already exists
+    # Initialize database connection
     db_name = 'fda_recall_etl.db'
     db_connection = duckdb.connect(db_name) 
     table_name = 'recalled_products'
@@ -225,8 +227,8 @@ def main():
     driver.get(URL)
     
     ############################ SCRAPE DATA ############################
-    
-    most_recent_date = get_most_recent_date_from_db(table_name, db_connection)
+    # will fetch most_recent_date if db exists
+    most_recent_date = get_most_recent_date_from_db(table_name, db_connection) 
     
     if most_recent_date is None:
         # Scrape all data
@@ -245,13 +247,14 @@ def main():
     
     # TODO: Check for completeness: compare number of rows from pandas to the number of rows that the text for id="datatable_info" shows.
     
-    ############################ TRANSFORM/CLEAN DATA ############################
-    clean_data = clean_data(data)
+    ############################ TRANSFORM/CLEAN DATA ############################ 
+    cleaned_data = clean_data(data)
     
     ############################ LOAD/SAVE DATA ############################
-    update_database(clean_data, table_name, db_connection)
+    create_table_query = generate_create_table_statement(cleaned_data, table_name)
+    db_connection.execute(create_table_query)
+    update_database(cleaned_data, table_name, db_connection)
     db_connection.close()
     
-     
-if __name__ == "__main__":
+if __name__ == "__main__": 
     main()
