@@ -128,10 +128,10 @@ def get_most_recent_date_from_db(table_name, db_connection):
     query = f"SELECT MAX(Date) FROM {table_name};"
     result = duckdb.query(query, connection=db_connection).fetchall()
     
-    most_recent_date = result[0][0]
+    most_recent_date = result[0][0] if result and result[0][0] is not None else None
     
-    # If the result is not a date object, convert it to pandas datetime.date format
-    if not isinstance(most_recent_date, date):
+    # If most_recent_date is not None and not a date object, convert it to pandas datetime.date format
+    if most_recent_date is not None and not isinstance(most_recent_date, date):
         most_recent_date = pd.to_datetime(most_recent_date).date()
     
     return most_recent_date
@@ -188,12 +188,17 @@ def generate_create_table_statement(df, table_name):
     return create_stmt
 
 def update_database(new_data_df, table_name, db_connection):
+    # Dynamically generate create table statement if the table doesn't exist
+    create_table_statement = generate_create_table_statement(new_data_df, table_name)
+    duckdb.query(create_table_statement, connection=db_connection)
+    
     if not new_data_df.empty:
         new_data_df.to_sql(table_name, db_connection, if_exists='append', index=False)
         print(f"Inserted {len(new_data_df)} new records into {table_name}.")
     else:
         print("No new data to insert.")
-############################ MAIN FUNCTION ############################
+        
+############################ MAIN FUNCTION ############################ 
 
 def main():
     
@@ -210,15 +215,27 @@ def main():
     warnings.simplefilter(action='ignore', category=FutureWarning)
     ignored_exceptions=(NoSuchElementException,StaleElementReferenceException,)
     
+    # Initialize database or connect to database if it already exists
+    db_name = 'fda_recall_etl.db'
+    db_connection = duckdb.connect(db_name) 
+    table_name = 'fda_food_recall'
+    
     # Initialize web driver
     driver = webdriver.Chrome(options=options)
     driver.get(URL)
     
     ############################ SCRAPE DATA ############################
-    # TODO: Conditional for scraping all data or only new data after a given date
-    data = scrape_data(driver, ignored_exceptions)
     
-    # Exit driver at the end of the loop
+    most_recent_date = get_most_recent_date_from_db(table_name, db_connection)
+    
+    if most_recent_date is None:
+        # Scrape all data
+        data = scrape_data(driver, ignored_exceptions)
+    else:
+        # Scrape data after most recent date
+        data = scrape_data(driver, ignored_exceptions,most_recent_date=most_recent_date)
+    
+    # Exit driver
     driver.quit()
     
     num_tables = len(data)
@@ -227,7 +244,7 @@ def main():
     data = pd.concat(data)
     print(data)
     
-    # TODO: compare number of rows from pandas to the number of rows that the text for id="datatable_info" shows.
+    # TODO: Compare number of rows from pandas to the number of rows that the text for id="datatable_info" shows.
     
     ############################ TRANSFORM/CLEAN DATA ############################
     clean_data = clean_data(data)
@@ -235,6 +252,7 @@ def main():
     ############################ LOAD/SAVE DATA ############################
     # TODO: Load data into database (database TBD)
     
+    db_connection.close()
     
     
 if __name__ == "__main__":
