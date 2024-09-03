@@ -12,7 +12,11 @@ import pandas as pd
 import warnings
 from io import StringIO
 import duckdb
+import duckdb_engine
 from datetime import date
+import re
+from sqlalchemy import create_engine
+
 
 ############################ FUNCTIONS ############################
 # TODO: Scrape only new data function
@@ -143,10 +147,10 @@ def get_most_recent_date_from_db(table_name, db_connection):
         return None
 
 def clean_data(data):
-    
     df = data.copy()
-    # Drop first column
-    df = df.drop(df.columns[0], axis=1)
+    
+    # Drop the first column
+    #df = df.drop(df.columns[0], axis=1)
 
     # Drop rows where critical fields have missing values
     critical_fields = ['Brand Name(s)', 'Product Description', 'Product Type']
@@ -155,15 +159,15 @@ def clean_data(data):
     # Replace missing values in non-critical fields with "Not provided"
     df.fillna(value="Not provided", inplace=True)
 
-    # Convert the Date column to pandas datetime.date format (Only has year, month, day)
-    #df['Date'] = pd.to_datetime(df['Date']).dt.date
-
     # Ensure all other columns are of type string
     for col in df.columns:
         if col != 'Date':
             df[col] = df[col].astype(str)
+
+    # Format columns to uppercase with underscores instead of spaces and remove parentheses 
+    df.columns = [re.sub(r'[()]+', '', col).replace(' ', '_').upper() for col in df.columns]
     
-    return(df)
+    return df
 
 def generate_create_table_statement(df, table_name):
     # Mapping pandas dtypes to DuckDB SQL types
@@ -178,7 +182,7 @@ def generate_create_table_statement(df, table_name):
     # Start of CREATE TABLE statement
     create_stmt = f"CREATE TABLE IF NOT EXISTS {table_name} ("
     
-    # Loop through each column and its dtype to add column definitions
+    # Loop through each column and its dtype to add column definitions 
     column_definitions = []
     for column in df.columns:
         col_name = column.replace(" ", "_").upper() 
@@ -193,10 +197,19 @@ def generate_create_table_statement(df, table_name):
     
     return create_stmt
 
-def update_database(db_connection, table_name, new_data):
-    if not new_data.empty:
-        new_data.to_sql(table_name, db_connection, if_exists='append', index=False)
-        print(f"Inserted {len(new_data)} new rows into {table_name}.")
+def initialize_database(db_connection, df, table_name):
+    create_table_query = generate_create_table_statement(df, table_name)
+    
+    # Debug: Print the generated CREATE TABLE statement
+    print("Generated SQL statement:", create_table_query)
+    
+    # Execute the CREATE TABLE statement
+    db_connection.execute(create_table_query) 
+
+def update_database(df, table_name, engine):
+    if not df.empty:
+        df.to_sql(table_name, engine, if_exists='append', index=False)
+        print(f"Inserted {len(df)} new rows into {table_name}.")
     else:
         print("No new data to insert.")
         
@@ -249,12 +262,17 @@ def main():
     
     ############################ TRANSFORM/CLEAN DATA ############################ 
     cleaned_data = clean_data(data)
+    print("Clean data:")
+    print(cleaned_data)
     
     ############################ LOAD/SAVE DATA ############################
-    create_table_query = generate_create_table_statement(cleaned_data, table_name)
-    db_connection.execute(create_table_query)
-    update_database(cleaned_data, table_name, db_connection)
-    db_connection.close()
+    initialize_database(db_connection, cleaned_data, table_name)
+    # Create a SQLAlchemy engine for DuckDB
+    engine = create_engine('duckdb:///' + db_name)
+    update_database(cleaned_data, table_name, engine)
     
-if __name__ == "__main__": 
-    main()
+    db_connection.close()
+     
+if __name__ == "__main__":  
+    main() 
+
