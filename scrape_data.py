@@ -17,11 +17,24 @@ from datetime import date
 import re
 from sqlalchemy import create_engine
 
-
 ############################ FUNCTIONS ############################
-# TODO: Scrape only new data function
-
 def scrape_data(driver, ignored_exceptions, most_recent_date=None):
+    """
+    Scrapes data from HTML tables on the FDA website using Selenium WebDriver and returns a list of pandas DataFrames.
+    If a `most_recent_date` is provided, the function filters out any rows with dates earlier than or equal to this date.
+    The function continues to scrape until all new data is collected or there are no more pages to scrape.
+
+    Args:
+        driver (selenium.webdriver): The Selenium WebDriver instance used to interact with the webpage.
+        ignored_exceptions (tuple): A tuple of exceptions that should be ignored during the WebDriverWait operations.
+        most_recent_date (datetime.date, optional): The most recent date found in the database. If provided, only data more 
+        recent than this date will be scraped. Defaults to None.
+
+    Returns:
+        list of pd.DataFrame: A list of pandas DataFrames, each containing the data from one page of the table. The DataFrames 
+        are filtered to exclude any rows with dates earlier than or equal to `most_recent_date`, if provided.
+    """
+    
     # List of pandas dfs to be returned
     dataframes = []
     
@@ -35,6 +48,7 @@ def scrape_data(driver, ignored_exceptions, most_recent_date=None):
     # Load HTML to scrape data
     html = StringIO(driver.page_source)
     
+    # Data Scraping loop
     while(flag):        
         ### Extract the HTML table ###
         try:
@@ -44,10 +58,10 @@ def scrape_data(driver, ignored_exceptions, most_recent_date=None):
             # Read HTML with pandas
             dfs = pd.read_html(html)
 
-            # Add df to list of dfs
+            # Add first and only df from scraped list of df to final list of dfs
             if dfs:
                 df = dfs[0]
-                # Convert the Date column to pandas datetime.date format (Only has year, month, day) for date comparisons in case most_recent_date was provided.
+                # Convert the Date column to pandas datetime.date format (Only has year, month, day) for date comparisons in case most_recent_date was provided
                 df['Date'] = pd.to_datetime(df['Date']).dt.date
                 if has_recent_date:
                     # Filter out rows with dates earlier than or equal to the most recent date
@@ -79,17 +93,16 @@ def scrape_data(driver, ignored_exceptions, most_recent_date=None):
          
         ### Update loop condition ###
         try:
-            last_btn = WebDriverWait(driver, 10, ignored_exceptions=ignored_exceptions).until(EC.presence_of_element_located((By.ID, "datatable_last")))
-            
             # Update loop condition for scraping all data (whether there's more data to scrape)
+            last_btn = WebDriverWait(driver, 10, ignored_exceptions=ignored_exceptions).until(EC.presence_of_element_located((By.ID, "datatable_last")))
             last_btn_classes = last_btn.get_attribute("class")
             flag = "disabled" not in last_btn_classes
             
             # Update loop condition for scraping only new data
             if has_recent_date:
                 if df.shape[0] < 10: # checking most recent data frame
-                    # New data does not take up a full table of 10 rows, meaning there are no more new data. 
-                    # Loop condition updated to false to stop scraping.
+                    # New data does not take up a full table of 10 rows, meaning there are no more new data
+                    # Loop condition updated to false to stop scraping
                     flag = False 
                     print("No more new data, ending data scraping...")
         except Exception as e:
@@ -107,10 +120,10 @@ def scrape_data(driver, ignored_exceptions, most_recent_date=None):
                 print(f"An error has occurred whilst trying to click next button with id datatable_next: {e}")
                 break
         
-        # DEBUG: Update table counter
+        # DEBUG: Update table counter 
         table_num += 1
         
-        ### Wait for old element vars to go stale ###
+        ### Wait for old element vars to go stale before moving onto next page to avoid exceptions ###
         if flag:
             try:
                 WebDriverWait(driver, 10).until(EC.staleness_of(next_button))
@@ -129,6 +142,18 @@ def scrape_data(driver, ignored_exceptions, most_recent_date=None):
     return(dataframes) 
 
 def get_most_recent_date_from_db(table_name, db_connection):
+    """
+    Retrieves the most recent date from the specified table in the DuckDB database.
+    If the table does not exist or the query returns no result, it returns None.
+
+    Args:
+        table_name (str): The name of the table from which to retrieve the most recent date.
+        db_connection (duckdb.DuckDBPyConnection): A connection object to the DuckDB database.
+
+    Returns:
+        datetime.date or None: The most recent date found in the table, or None if no date is found.
+    """
+    
     try:
         query = f"SELECT MAX(Date) FROM {table_name};"
         result = duckdb.query(query, connection=db_connection).fetchall()
@@ -147,10 +172,17 @@ def get_most_recent_date_from_db(table_name, db_connection):
         return None
 
 def clean_data(data):
-    df = data.copy()
+    """
+    Cleans the extracted FDA food recall data by handling missing values, ensuring proper data types, and standardizing field names.
+
+    Args:
+        data (pd.DataFrame): The DataFrame containing the raw extracted data.
+
+    Returns:
+        pd.DataFrame: The cleaned DataFrame.
+    """
     
-    # Drop the first column
-    #df = df.drop(df.columns[0], axis=1)
+    df = data.copy()
 
     # Drop rows where critical fields have missing values
     critical_fields = ['Brand Name(s)', 'Product Description', 'Product Type']
@@ -170,6 +202,18 @@ def clean_data(data):
     return df
 
 def generate_create_table_statement(df, table_name):
+    """
+    Generates a SQL CREATE TABLE statement based on a given pandas DataFrame. 
+    Maps pandas data types to corresponding SQL data types used in DuckDB.
+    
+    Args:
+        df (pd.DataFrame): The DataFrame from which to generate the SQL table schema.
+        table_name (str): The name of the table to be created.
+
+    Returns:
+        str: A SQL CREATE TABLE statement.
+    """
+    
     # Mapping pandas dtypes to DuckDB SQL types
     dtype_mapping = {
         'int64': 'BIGINT',
@@ -179,10 +223,9 @@ def generate_create_table_statement(df, table_name):
         'object': 'TEXT'
     }
     
-    # Start of CREATE TABLE statement
     create_stmt = f"CREATE TABLE IF NOT EXISTS {table_name} ("
     
-    # Loop through each column and its dtype to add column definitions 
+    # Loops through each column and its dtype to add column definitions 
     column_definitions = []
     for column in df.columns:
         col_name = column.replace(" ", "_").upper() 
@@ -192,12 +235,26 @@ def generate_create_table_statement(df, table_name):
         
         column_definitions.append(f"{col_name} {sql_type}")
     
-    # Combine column definitions and complete the statement
+    # Combine column definitions
     create_stmt += ", ".join(column_definitions) + ");"
     
     return create_stmt
 
 def initialize_database(db_connection, df, table_name):
+    """
+    Initializes a table in the DuckDB database based on a pandas DataFrame schema.
+    Generates a SQL CREATE TABLE statement from the DataFrame's columns and data types,
+    then executes the statement to create the table in the DuckDB database if it doesn't already exist.
+
+    Args:
+        db_connection (duckdb.DuckDBPyConnection): A connection object to the DuckDB database.
+        df (pd.DataFrame): The DataFrame used to define the table schema.
+        table_name (str): The name of the table to be created.
+
+    Returns:
+        None
+    """
+    
     create_table_query = generate_create_table_statement(df, table_name)
     
     # Debug: Print the generated CREATE TABLE statement
@@ -207,6 +264,20 @@ def initialize_database(db_connection, df, table_name):
     db_connection.execute(create_table_query) 
 
 def update_database(df, table_name, engine):
+    """
+    Updates the specified table in the database with new data from a pandas DataFrame.
+    Checks if the DataFrame is not empty and then inserts its rows into the specified table
+    in the database. If the DataFrame is empty, no data is inserted.
+
+    Args:
+        df (pd.DataFrame): The DataFrame containing the data to be inserted.
+        table_name (str): The name of the table into which the data will be inserted.
+        engine (sqlalchemy.engine.Engine): The database engine object used to execute the SQL statement.
+
+    Returns:
+        None
+    """
+    
     if not df.empty:
         df.to_sql(table_name, engine, if_exists='append', index=False)
         print(f"Inserted {len(df)} new rows into {table_name}.")
@@ -257,9 +328,7 @@ def main():
     print("Total tables scraped:", num_tables)
     data = pd.concat(data)
     print(data)
-    
-    # TODO: Check for completeness: compare number of rows from pandas to the number of rows that the text for id="datatable_info" shows.
-    
+        
     ############################ TRANSFORM/CLEAN DATA ############################ 
     cleaned_data = clean_data(data)
     print("Clean data:")
